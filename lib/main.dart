@@ -90,7 +90,7 @@ class TimerScreen extends StatefulWidget {
   State<TimerScreen> createState() => _TimerScreenState();
 }
 
-class _TimerScreenState extends State<TimerScreen> {
+class _TimerScreenState extends State<TimerScreen> with WindowListener {
   TimerMode _mode = TimerMode.stopwatch;
   int _elapsedSeconds = 0;
   int _pomodoroDurationMinutes = 25;
@@ -103,6 +103,7 @@ class _TimerScreenState extends State<TimerScreen> {
   @override
   void initState() {
     super.initState();
+     windowManager.addListener(this);
     _remainingSeconds = _pomodoroDurationMinutes * 60;
     _loadSessions();
   }
@@ -236,8 +237,14 @@ class _TimerScreenState extends State<TimerScreen> {
 
   @override
   void dispose() {
+    windowManager.removeListener(this);
     _timer?.cancel();
     super.dispose();
+  }
+  
+  @override
+  void onWindowRestore() {
+    windowManager.setFullScreen(true);
   }
 
   void _openHistory() {
@@ -254,6 +261,16 @@ class _TimerScreenState extends State<TimerScreen> {
     final isFullscreen = await windowManager.isFullScreen();
     await windowManager.setFullScreen(!isFullscreen);
   }
+
+  Future<void> _minimizeWindow() async {
+    final isFullscreen = await windowManager.isFullScreen();
+    if (isFullscreen) {
+    await windowManager.setFullScreen(false);
+    await Future.delayed(const Duration(milliseconds: 150));
+  }
+  await windowManager.minimize();
+}
+  
 
   @override
   Widget build(BuildContext context) {
@@ -406,7 +423,7 @@ class _TimerScreenState extends State<TimerScreen> {
               children: [
                 IconButton(
                   icon: Icon(Icons.remove, color: mutedText, size: 20),
-                  onPressed: () => windowManager.minimize(),
+                  onPressed: _minimizeWindow,
                   tooltip: 'Minimize',
                 ),
                 IconButton(
