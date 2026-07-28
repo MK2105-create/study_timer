@@ -1,12 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
-// Warm palette — defined once at the top level so every screen can reuse it.
 const bgColor = Color(0xFF1C1410);
 const surfaceColor = Color(0xFF2A2019);
 const accentColor = Color(0xFFE8A24C);
@@ -19,7 +17,7 @@ void main() async {
   await windowManager.ensureInitialized();
 
   WindowOptions windowOptions = const WindowOptions(
-    size: Size(420, 700), // fallback size; overridden by setFullScreen below
+    size: Size(420, 700),
     center: true,
     backgroundColor: Colors.transparent,
     titleBarStyle: TitleBarStyle.hidden,
@@ -27,7 +25,7 @@ void main() async {
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.show();
     await windowManager.focus();
-    await windowManager.setFullScreen(true); // NEW — launches fullscreen
+    await windowManager.setFullScreen(true);
   });
 
   runApp(const StudyTimerApp());
@@ -58,6 +56,7 @@ class StudyTimerApp extends StatelessWidget {
 }
 
 enum TimerMode { stopwatch, pomodoro }
+enum ClockStyle { minimal, led }
 
 class StudySession {
   final int durationSeconds;
@@ -92,6 +91,7 @@ class TimerScreen extends StatefulWidget {
 
 class _TimerScreenState extends State<TimerScreen> with WindowListener {
   TimerMode _mode = TimerMode.stopwatch;
+  ClockStyle _clockStyle = ClockStyle.minimal;
   int _elapsedSeconds = 0;
   int _pomodoroDurationMinutes = 25;
   late int _remainingSeconds;
@@ -103,9 +103,10 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
   @override
   void initState() {
     super.initState();
-     windowManager.addListener(this);
+    windowManager.addListener(this);
     _remainingSeconds = _pomodoroDurationMinutes * 60;
     _loadSessions();
+    _loadPreferences();
   }
 
   Future<void> _loadSessions() async {
@@ -124,6 +125,54 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
     final String encoded =
         jsonEncode(_sessions.map((s) => s.toJson()).toList());
     await prefs.setString('sessions', encoded);
+  }
+
+  Future<void> _loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    final styleStr = prefs.getString('clockStyle');
+    if (styleStr != null) {
+      setState(() {
+        _clockStyle = ClockStyle.values.byName(styleStr);
+      });
+    }
+  }
+
+  Future<void> _setClockStyle(ClockStyle style) async {
+    setState(() => _clockStyle = style);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('clockStyle', style.name);
+  }
+
+  void _openStylePicker() {
+    showDialog(
+      context: context,
+      builder: (context) => SimpleDialog(
+        backgroundColor: surfaceColor,
+        title: Text('Clock style', style: TextStyle(color: creamText)),
+        children: [
+          RadioListTile<ClockStyle>(
+            title: Text('Minimal', style: TextStyle(color: creamText)),
+            value: ClockStyle.minimal,
+            groupValue: _clockStyle,
+            activeColor: accentColor,
+            onChanged: (v) {
+              if (v != null) _setClockStyle(v);
+              Navigator.pop(context);
+            },
+          ),
+          RadioListTile<ClockStyle>(
+            title: Text('LED', style: TextStyle(color: creamText)),
+            value: ClockStyle.led,
+            groupValue: _clockStyle,
+            activeColor: accentColor,
+            onChanged: (v) {
+              if (v != null) _setClockStyle(v);
+              Navigator.pop(context);
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   void _startTimer() {
@@ -229,22 +278,11 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
         .fold(0, (sum, s) => sum + s.durationSeconds);
   }
 
-  double get _pomodoroProgress {
-    final total = _pomodoroDurationMinutes * 60;
-    if (total == 0) return 0;
-    return (total - _remainingSeconds) / total;
-  }
-
   @override
   void dispose() {
     windowManager.removeListener(this);
     _timer?.cancel();
     super.dispose();
-  }
-  
-  @override
-  void onWindowRestore() {
-    windowManager.setFullScreen(true);
   }
 
   void _openHistory() {
@@ -256,7 +294,6 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
     );
   }
 
-  // NEW — toggles fullscreen off, so there's always a way out.
   Future<void> _exitFullscreen() async {
     final isFullscreen = await windowManager.isFullScreen();
     await windowManager.setFullScreen(!isFullscreen);
@@ -265,17 +302,30 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
   Future<void> _minimizeWindow() async {
     final isFullscreen = await windowManager.isFullScreen();
     if (isFullscreen) {
-    await windowManager.setFullScreen(false);
-    await Future.delayed(const Duration(milliseconds: 150));
+      await windowManager.setFullScreen(false);
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+    await windowManager.minimize();
   }
-  await windowManager.minimize();
-}
-  
+
+  @override
+  void onWindowRestore() {
+    windowManager.setFullScreen(true);
+  }
 
   @override
   Widget build(BuildContext context) {
     final displaySeconds =
         _mode == TimerMode.stopwatch ? _elapsedSeconds : _remainingSeconds;
+
+    // Responsive sizing — computed as a fraction of the ACTUAL screen
+    // size, clamped to sane min/max bounds, instead of fixed pixel
+    // values tuned for one specific window size.
+    final screenSize = MediaQuery.of(context).size;
+    final clockFontSize = (screenSize.width * 0.065).clamp(40.0, 130.0);
+    final labelFontSize = (screenSize.width * 0.013).clamp(13.0, 20.0);
+    final buttonFontSize = (screenSize.width * 0.015).clamp(14.0, 22.0);
+    final sectionSpacing = (screenSize.height * 0.045).clamp(20.0, 64.0);
 
     return Scaffold(
       body: Stack(
@@ -288,11 +338,11 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
                   'Today: ${_formatTime(_todaysTotalSeconds)}',
                   style: TextStyle(
                     color: mutedText,
-                    fontSize: 14,
+                    fontSize: labelFontSize,
                     letterSpacing: 0.5,
                   ),
                 ),
-                const SizedBox(height: 32),
+                SizedBox(height: sectionSpacing),
                 SegmentedButton<TimerMode>(
                   style: SegmentedButton.styleFrom(
                     backgroundColor: surfaceColor,
@@ -300,9 +350,9 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
                     selectedBackgroundColor: accentColor.withOpacity(0.2),
                     selectedForegroundColor: accentColor,
                     side: BorderSide.none,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    textStyle: const TextStyle(fontSize: 13),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 4),
+                    textStyle: TextStyle(fontSize: labelFontSize),
                   ),
                   segments: const [
                     ButtonSegment(
@@ -315,50 +365,27 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
                     _switchMode(newSelection.first);
                   },
                 ),
-                const SizedBox(height: 48),
-                SizedBox(
-                  width: 320,
-                  height: 320,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      CustomPaint(
-                        size: const Size(320, 320),
-                        painter: _RingPainter(
-                          progress:
-                              _mode == TimerMode.pomodoro ? _pomodoroProgress : 0,
-                          color: accentColor,
-                          trackColor: surfaceColor,
-                        ),
-                      ),
-                      Text(
-                        _formatTime(displaySeconds),
-                        style: GoogleFonts.dmSerifDisplay(
-                          fontSize: 56,
-                          color: creamText,
-                          shadows: [
-                            Shadow(
-                              color: accentColor.withOpacity(0.35),
-                              blurRadius: 28,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 32),
+                SizedBox(height: sectionSpacing * 1.6),
+                _clockStyle == ClockStyle.led
+                    ? buildLedClock(
+                        _formatTime(displaySeconds), clockFontSize, accentColor)
+                    : buildMinimalClock(
+                        _formatTime(displaySeconds), clockFontSize, creamText),
+                SizedBox(height: sectionSpacing * 1.6),
                 if (_mode == TimerMode.pomodoro && !_isRunning)
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Text('Duration: ', style: TextStyle(color: mutedText)),
+                      Text('Duration: ',
+                          style: TextStyle(
+                              color: mutedText, fontSize: labelFontSize)),
                       DropdownButton<int>(
                         value: _pomodoroDurationMinutes,
                         dropdownColor: surfaceColor,
-                        style: TextStyle(color: creamText),
-                        underline:
-                            Container(height: 1, color: mutedText.withOpacity(0.3)),
+                        style: TextStyle(
+                            color: creamText, fontSize: labelFontSize),
+                        underline: Container(
+                            height: 1, color: mutedText.withOpacity(0.3)),
                         items: [15, 20, 25, 30, 45, 60]
                             .map((m) => DropdownMenuItem(
                                 value: m, child: Text('$m min')))
@@ -373,7 +400,7 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
                       ),
                     ],
                   ),
-                const SizedBox(height: 40),
+                SizedBox(height: sectionSpacing),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -381,41 +408,52 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: accentColor,
                         foregroundColor: bgColor,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 32, vertical: 14),
+                        padding: EdgeInsets.symmetric(
+                            horizontal: buttonFontSize * 2.2,
+                            vertical: buttonFontSize),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(30)),
                       ),
                       onPressed: _isRunning ? _pauseTimer : _startTimer,
-                      child: Text(_isRunning ? 'Pause' : 'Start'),
+                      child: Text(_isRunning ? 'Pause' : 'Start',
+                          style: TextStyle(fontSize: buttonFontSize)),
                     ),
-                    const SizedBox(width: 16),
+                    SizedBox(width: sectionSpacing * 0.4),
                     OutlinedButton(
                       style: OutlinedButton.styleFrom(
                         foregroundColor: mutedText,
                         side: BorderSide(color: mutedText.withOpacity(0.3)),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 32, vertical: 14),
+                        padding: EdgeInsets.symmetric(
+                            horizontal: buttonFontSize * 2.2,
+                            vertical: buttonFontSize),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(30)),
                       ),
                       onPressed: _resetTimer,
-                      child: const Text('Reset'),
+                      child: Text('Reset',
+                          style: TextStyle(fontSize: buttonFontSize)),
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
-                IconButton(
-                  icon: Icon(Icons.history, color: mutedText),
-                  onPressed: _openHistory,
+                SizedBox(height: sectionSpacing * 0.7),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.palette_outlined, color: mutedText),
+                      onPressed: _openStylePicker,
+                      tooltip: 'Clock style',
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.history, color: mutedText),
+                      onPressed: _openHistory,
+                      tooltip: 'History',
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-
-          // Custom window controls — since we're borderless/fullscreen,
-          // Windows' native minimize/maximize/close buttons don't exist
-          // anymore. We rebuild all three ourselves, styled to match.
           Positioned(
             top: 16,
             right: 16,
@@ -427,7 +465,8 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
                   tooltip: 'Minimize',
                 ),
                 IconButton(
-                  icon: Icon(Icons.fullscreen_exit, color: mutedText, size: 20),
+                  icon:
+                      Icon(Icons.fullscreen_exit, color: mutedText, size: 20),
                   onPressed: _exitFullscreen,
                   tooltip: 'Exit fullscreen',
                 ),
@@ -445,50 +484,138 @@ class _TimerScreenState extends State<TimerScreen> with WindowListener {
   }
 }
 
-class _RingPainter extends CustomPainter {
-  final double progress;
-  final Color color;
-  final Color trackColor;
+// STYLE 1 — Minimal: plain large serif digits, no card, no background.
+// The simplest possible rendering — practically impossible to render
+// incorrectly since it's just a single Text widget.
+Widget buildMinimalClock(String formatted, double fontSize, Color textColor) {
+  return Text(
+    formatted,
+    style: GoogleFonts.dmSerifDisplay(
+      fontSize: fontSize,
+      color: textColor,
+      shadows: [
+        Shadow(color: accentColor.withOpacity(0.3), blurRadius: fontSize * 0.4),
+      ],
+      fontFeatures: const [FontFeature.tabularFigures()],
+    ),
+  );
+}
 
-  _RingPainter({
-    required this.progress,
-    required this.color,
-    required this.trackColor,
+// STYLE 2 — LED: classic 7-segment digital clock look.
+// Each digit is 7 rectangles that are either "on" (lit) or "off" (dim),
+// based on a fixed lookup table — no clipping, no font metrics, no
+// animation timing to get wrong. Just solid shapes and a color switch.
+const Map<String, Set<String>> _segmentMap = {
+  '0': {'a', 'b', 'c', 'd', 'e', 'f'},
+  '1': {'b', 'c'},
+  '2': {'a', 'b', 'g', 'e', 'd'},
+  '3': {'a', 'b', 'g', 'c', 'd'},
+  '4': {'f', 'g', 'b', 'c'},
+  '5': {'a', 'f', 'g', 'c', 'd'},
+  '6': {'a', 'f', 'g', 'e', 'c', 'd'},
+  '7': {'a', 'b', 'c'},
+  '8': {'a', 'b', 'c', 'd', 'e', 'f', 'g'},
+  '9': {'a', 'b', 'c', 'd', 'f', 'g'},
+};
+
+Widget buildLedClock(String formatted, double fontSize, Color onColor) {
+  final digitWidth = fontSize * 0.62;
+  final digitHeight = fontSize * 1.3;
+  final offColor = onColor.withOpacity(0.08);
+
+  return Row(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: formatted.split('').map((char) {
+      if (char == ':') {
+        return SizedBox(
+          width: fontSize * 0.28,
+          height: digitHeight,
+          child: Center(
+            child: Text(
+              ':',
+              style: TextStyle(
+                fontSize: fontSize * 0.55,
+                color: onColor,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        );
+      }
+      return Padding(
+        padding: EdgeInsets.symmetric(horizontal: fontSize * 0.035),
+        child: SevenSegmentDigit(
+          digit: char,
+          width: digitWidth,
+          height: digitHeight,
+          onColor: onColor,
+          offColor: offColor,
+        ),
+      );
+    }).toList(),
+  );
+}
+
+class SevenSegmentDigit extends StatelessWidget {
+  final String digit;
+  final double width;
+  final double height;
+  final Color onColor;
+  final Color offColor;
+
+  const SevenSegmentDigit({
+    super.key,
+    required this.digit,
+    required this.width,
+    required this.height,
+    required this.onColor,
+    required this.offColor,
   });
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 8;
+  Widget build(BuildContext context) {
+    final segsOn = _segmentMap[digit] ?? <String>{};
+    final t = width * 0.18; // segment thickness
+    final margin = width * 0.10; // side margin for horizontal segments
+    final segW = width - margin * 2; // horizontal segment length
+    final vSegH = (height - t * 1.6) / 2; // vertical segment length
+    final radius = t * 0.35;
 
-    final trackPaint = Paint()
-      ..color = trackColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 6
-      ..strokeCap = StrokeCap.round;
-    canvas.drawCircle(center, radius, trackPaint);
+    Widget seg(String name, double left, double top, double w, double h) {
+      final isOn = segsOn.contains(name);
+      return Positioned(
+        left: left,
+        top: top,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: w,
+          height: h,
+          decoration: BoxDecoration(
+            color: isOn ? onColor : offColor,
+            borderRadius: BorderRadius.circular(radius),
+            boxShadow: isOn
+                ? [BoxShadow(color: onColor.withOpacity(0.5), blurRadius: 6)]
+                : null,
+          ),
+        ),
+      );
+    }
 
-    final progressPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 6
-      ..strokeCap = StrokeCap.round;
-
-    const startAngle = -math.pi / 2;
-    final sweepAngle = 2 * math.pi * progress;
-
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      startAngle,
-      sweepAngle,
-      false,
-      progressPaint,
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Stack(
+        children: [
+          seg('a', margin, 0, segW, t),
+          seg('f', 0, t * 0.5, t, vSegH),
+          seg('b', width - t, t * 0.5, t, vSegH),
+          seg('g', margin, height / 2 - t / 2, segW, t),
+          seg('e', 0, height / 2 + t * 0.5, t, vSegH),
+          seg('c', width - t, height / 2 + t * 0.5, t, vSegH),
+          seg('d', margin, height - t, segW, t),
+        ],
+      ),
     );
-  }
-
-  @override
-  bool shouldRepaint(_RingPainter oldDelegate) {
-    return oldDelegate.progress != progress;
   }
 }
 
@@ -536,7 +663,8 @@ class HistoryScreen extends StatelessWidget {
                     '${s.completedAt.minute.toString().padLeft(2, '0')}',
                     style: TextStyle(color: mutedText),
                   ),
-                  trailing: Text(s.mode.name, style: TextStyle(color: mutedText)),
+                  trailing:
+                      Text(s.mode.name, style: TextStyle(color: mutedText)),
                 );
               },
             ),
